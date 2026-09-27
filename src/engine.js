@@ -4,8 +4,8 @@
  *
  * FastForward is a browser extension. This engine reimplements the
  * modules that can run without a real page (fetch / GraphQL / WS / HTML parse)
- * and uses FastForward crowd as a fallback:
- *   POST https://crowd.fastforward.team/crowd/query_v1
+ * No third-party bypass APIs. The bot only talks to Discord and
+ * to the shortener URL you pasted (same as FastForward in a browser).
  */
 
 import WebSocket from "ws";
@@ -82,29 +82,48 @@ function metaRefresh(html, base) {
   }
 }
 
-async function crowdQuery(url) {
-  try {
-    const u = new URL(url);
-    const body = new URLSearchParams({
-      domain: u.hostname,
-      path: u.pathname.replace(/^\//, ""),
-    });
-    const res = await fetch("https://crowd.fastforward.team/crowd/query_v1", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": UA,
-      },
-      body,
-    });
-    const text = (await res.text()).trim();
-    if (/^https?:\/\//i.test(text)) return text;
-    const extracted = extractUrl(text);
-    if (extracted) return extracted;
-  } catch {
-    /* crowd is optional */
+function scanHtmlForDestination(html, base) {
+  const patterns = [
+    /stepDat = '(.+?)';/,
+    /bufpsvdhmjybvgfncqfa="([^"]+)"/,
+    /id=["']link["'][^>]*href=["']([^"']+)/i,
+    /href=["']([^"']+)["'][^>]*id=["']link["']/i,
+    /<a[^>]+id=["']skip["'][^>]*href=["']([^"']+)/i,
+    /window\.location(?:\.href)?\s*=\s*["'](https?:\/\/[^"']+)/i,
+    /"destination"\s*:\s*"(https?:\/\/[^"]+)"/i,
+    /"targetUrl"\s*:\s*"(https?:\/\/[^"]+)"/i,
+    /"target_url"\s*:\s*"(https?:\/\/[^"]+)"/i,
+    /"finalUrl"\s*:\s*"(https?:\/\/[^"]+)"/i,
+  ];
+
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (!m) continue;
+    let value = m[1];
+    if (re.source.startsWith("stepDat")) {
+      try {
+        const jsonDat = JSON.parse(value);
+        value = jsonDat[jsonDat.length - 1]?.url;
+      } catch {
+        continue;
+      }
+    }
+    if (re.source.includes("bufpsvdhmjybvgfncqfa")) {
+      try {
+        value = Buffer.from(value, "base64").toString("utf8");
+      } catch {
+        continue;
+      }
+    }
+    if (value && /^https?:\/\//i.test(value)) {
+      try {
+        return new URL(value, base).href;
+      } catch {
+        return value;
+      }
+    }
   }
-  return null;
+  return metaRefresh(html, base);
 }
 
 // FastForward src/bypasses/linkvertise.js
@@ -236,9 +255,6 @@ async function bypassLetsboost(url) {
 
 // FastForward src/bypasses/workink.js (websocket path)
 async function bypassWorkink(url) {
-  const crowd = await crowdQuery(url);
-  if (crowd) return crowd;
-
   const pathname = new URL(url).pathname.slice(1);
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length < 2) return null;
@@ -358,17 +374,10 @@ export async function bypass(inputUrl) {
     }
 
     const { text } = await fetchText(current);
-    const refresh = metaRefresh(text, current);
-    if (refresh && !sameDest(refresh, current)) {
-      steps.push({ from: current, to: refresh, via: "meta-refresh" });
-      current = refresh;
-      continue;
-    }
-
-    const crowd = await crowdQuery(current);
-    if (crowd && !sameDest(crowd, current)) {
-      steps.push({ from: current, to: crowd, via: "fastforward-crowd" });
-      current = crowd;
+    const scraped = scanHtmlForDestination(text, current);
+    if (scraped && !sameDest(scraped, current)) {
+      steps.push({ from: current, to: scraped, via: "page-source" });
+      current = scraped;
       continue;
     }
 

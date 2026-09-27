@@ -1,54 +1,52 @@
-# FastForward Discord bot (Railway)
+# FastForward Discord bot
 
-Port of [FastForwardTeam/FastForward](https://github.com/FastForwardTeam/FastForward) for Discord.
+All bypass logic is **on the bot**. It does not call bypass.vip, FastForward crowd, or any other third-party bypass API.
 
-FastForward is a **browser extension**. It clicks around a live page (`document.querySelector`, form submit, XHR hooks). You cannot drop that repo onto Railway and have `/bypass` work. This bot:
+It only talks to:
 
-- Registers `/bypass` and `/supported`
-- Uses FastForward’s official host list
-- Reimplements the FastForward modules that work without a browser
-  - `linkvertise.js` GraphQL + `?r=` base64
-  - `boost.js` HTML token
-  - `rekonise.js` public API
-  - `sub2unlock.js` / `ytsubme.js` / `letsboost.js` HTML
-  - `workink.js` websocket
-- Falls back to HTTP redirects, meta-refresh, and FastForward crowd:
-  `https://crowd.fastforward.team/crowd/query_v1`
+- Discord
+- The URL you paste (same as opening that page)
 
-DOM-only / captcha / “watch this video” hosts will still fail. That is FastForward’s design, not a missing token.
+## Commands (both work)
 
-## Commands
+Slash (registered from the bot token on startup):
 
 ```
-/bypass url:<link>
+/bypass url:https://linkvertise.com/...
 /supported
-/supported query:linkvertise
+/supported query:work.ink
 ```
 
-## Railway
-
-1. Push this folder to a GitHub repo (or deploy from the zip).
-2. New project on [Railway](https://railway.app) → Deploy from GitHub.
-3. Variables:
+Prefix (works even if slash has not appeared yet):
 
 ```
-DISCORD_TOKEN=your_bot_token
-CLIENT_ID=your_application_id
-GUILD_ID=optional_test_server_id
+!bypass https://linkvertise.com/...
+!supported
+!supported linkvertise
 ```
 
-`PORT` is set by Railway. The process binds an HTTP health check on that port so Railway does not kill the bot.
+## Discord setup (this is why “nothing is called”)
 
-4. Discord invite (replace CLIENT_ID):
+1. https://discord.com/developers/applications → New Application
+2. Bot → Reset Token → that value is `DISCORD_TOKEN`
+3. Bot → Privileged Gateway Intents → enable **Message Content Intent**
+4. Invite (replace APPLICATION_ID):
 
 ```
-https://discord.com/oauth2/authorize?client_id=CLIENT_ID&scope=bot%20applications.commands&permissions=18432
+https://discord.com/oauth2/authorize?client_id=APPLICATION_ID&scope=bot%20applications.commands&permissions=18432
 ```
 
-5. Create the Discord app at https://discord.com/developers/applications  
-   Bot page → token. General Information → Application ID.
+If `/bypass` does not show, type `!bypass <url>` in the server. Slash commands can take a few minutes globally. Set `GUILD_ID` to your server ID so they appear immediately.
 
-If slash commands do not show, set `GUILD_ID` to your server ID and redeploy. Global commands can take up to an hour.
+## Railway variables
+
+```
+DISCORD_TOKEN=...
+GUILD_ID=optional_server_id
+PREFIX=!
+```
+
+No `CLIENT_ID` needed. Commands are registered from the token after login.
 
 ## Local
 
@@ -58,12 +56,8 @@ npm install
 npm start
 ```
 
-Needs Node 20+.
+Node 20+.
 
-## What this is not
+## Honest limit
 
-- Not the FastForward Chrome/Firefox extension
-- Not a full Playwright replay of every `src/bypasses/*.js` file
-- FastForward itself is no longer actively maintained; some modules are already stale
-
-Credits: FastForward team. Unlicense on the upstream project.
+FastForward’s original code runs inside a browser tab. This bot embeds those modules as server-side JS. Sites that need a captcha click or a live DOM still will not resolve. Nothing external is called to paper over that.

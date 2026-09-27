@@ -7,17 +7,15 @@ import {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
-  REST,
-  Routes,
   SlashCommandBuilder,
 } from "discord.js";
 import { bypass } from "./engine.js";
 import { FF_MODULES, filterSupported, isSupportedHost } from "./supported.js";
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const PORT = Number(process.env.PORT || 3000);
+const PREFIX = process.env.PREFIX || "!";
 
 if (!TOKEN) {
   console.error("DISCORD_TOKEN is required");
@@ -28,7 +26,13 @@ const PAGE_SIZE = 40;
 const cooldown = new Map();
 const COOLDOWN_MS = 2500;
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
 
 const commands = [
   new SlashCommandBuilder()
@@ -48,16 +52,12 @@ const commands = [
 ];
 
 async function registerCommands() {
-  if (!CLIENT_ID) {
-    console.warn("CLIENT_ID missing — slash commands will not auto-register");
-    return;
-  }
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  // Token is enough. Commands live on this bot application.
   if (GUILD_ID) {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    await client.application.commands.set(commands, GUILD_ID);
     console.log(`Registered guild commands for ${GUILD_ID}`);
   } else {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    await client.application.commands.set(commands);
     console.log("Registered global slash commands");
   }
 }
@@ -170,7 +170,7 @@ client.on("interactionCreate", async (interaction) => {
           name: "FastForward",
           value: [
             known ? "Host is on the FastForward list" : "Host is not on the official list",
-            result.module ? `Module: \`${result.module}\`` : "Module: generic / crowd / redirect",
+            result.module ? `Module: \`${result.module}\`` : "Module: local redirect / page source",
           ].join("\n"),
         }
       )
@@ -195,6 +195,77 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.editReply({ embeds: [embed] });
   } catch (err) {
     await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle("Bypass failed")
+          .setDescription(String(err.message || err).slice(0, 4000)),
+      ],
+    });
+  }
+});
+
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+  const [cmd, ...rest] = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const arg = rest.join(" ");
+
+  if (cmd === "supported") {
+    await message.reply(supportedEmbed(arg, 0));
+    return;
+  }
+
+  if (cmd !== "bypass") return;
+
+  const target = extractUrl(arg) || extractUrl(message.content);
+  if (!target) {
+    await message.reply(`Usage: \`${PREFIX}bypass https://linkvertise.com/...\``);
+    return;
+  }
+
+  const now = Date.now();
+  const last = cooldown.get(message.author.id) || 0;
+  if (now - last < COOLDOWN_MS) {
+    await message.reply("Wait a couple of seconds between bypasses.");
+    return;
+  }
+  cooldown.set(message.author.id, now);
+
+  const pending = await message.reply("Bypassing…");
+  try {
+    const result = await bypass(target);
+    const known = isSupportedHost(target);
+    const embed = new EmbedBuilder()
+      .setColor(result.changed ? 0x57f287 : 0xfee75c)
+      .setTitle(result.changed ? "Bypass result" : "No destination found")
+      .addFields(
+        { name: "Original", value: result.original.slice(0, 1024) },
+        { name: "Destination", value: result.destination.slice(0, 1024) },
+        {
+          name: "FastForward",
+          value: [
+            known ? "Host is on the FastForward list" : "Host is not on the official list",
+            result.module ? `Module: \`${result.module}\`` : "Module: local redirect / page source",
+          ].join("\n"),
+        }
+      )
+      .setFooter({ text: "All logic runs on this bot · FastForwardTeam/FastForward modules" });
+
+    if (result.steps.length) {
+      embed.addFields({
+        name: "Hops",
+        value: result.steps
+          .map((s, i) => `${i + 1}. ${s.via}`)
+          .join("\n")
+          .slice(0, 1024),
+      });
+    }
+
+    await pending.edit({ content: null, embeds: [embed] });
+  } catch (err) {
+    await pending.edit({
+      content: null,
       embeds: [
         new EmbedBuilder()
           .setColor(0xed4245)
